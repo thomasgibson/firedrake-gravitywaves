@@ -30,8 +30,7 @@ parser.add_argument("--hybridization",
 
 parser.add_argument("--inner_solver_type",
                     default="gamg",
-                    choices=["hypre", "gamg", "preonly-gamg",
-                             "direct", "hybrid_mg"],
+                    choices=["hypre", "gamg", "direct"],
                     help="Solver type for the linear solver.")
 
 parser.add_argument("--nu_cfl",
@@ -50,7 +49,7 @@ parser.add_argument("--order",
                     help="Order of the compatible mixed method.")
 
 parser.add_argument("--rtol",
-                    default=1.0E-6,
+                    default=1.0E-8,
                     type=float,
                     help="Rtolerance for the linear solve.")
 
