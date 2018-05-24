@@ -1,11 +1,18 @@
 from firedrake import *
+from function_spaces import construct_spaces
+from firedrake.petsc import PETSc
 from firedrake.utils import cached_property
 from pyop2.profiling import timed_stage
 
+import numpy as np
 
-class ExplicitSolver(object):
-    """Solver for the linearized compressible Boussinesq equations
-    (includes Coriolis term). This solver uses an explicit matrix solver
+
+__all__ = ["GravityWaveProblem"]
+
+
+class GravityWaveProblem(object):
+    """Problem context for the linearized compressible Boussinesq equations
+    (includes Coriolis term). The solver uses an explicit matrix solver
     and algebraic multigrid preconditioning. The equations are solved in
     three stages:
 
@@ -24,14 +31,20 @@ class ExplicitSolver(object):
         previous step, the buoyancy term is reconstructed.
     """
 
-    def __init__(self, W2, W3, Wb, dt, c, N, Omega, R, rtol=1.0E-8,
-                 inner_solver_type="gamg", hybridization=False, monitor=False):
-        """The constructor for the ExplicitSolver.
+    def __init__(self, order, refinements, num_layers,
+                 nu_cfl, c, N, Omega, R, rtol=1.0E-8,
+                 hexes=False, inner_pc_type="gamg", hybridization=False,
+                 monitor=False):
+        """The constructor for the GravityWaveProblem.
 
-        :arg W2: The HDiv velocity space.
-        :arg W3: The L2 pressure space.
-        :arg Wb: The "Charney-Phillips" space for the buoyancy field.
-        :arg dt: A positive real number denoting the time-step size.
+        :arg order: A positive integer denoting the order of finite
+            elements to use in the spatial discretization.
+        :arg refinements: A positive integer describing the number of
+            horizontal refinements to make.
+        :arg num_layers: An integer describing the number of vertical
+            levels to use.
+        :arg nu_cfl: The acoustic horizontal Courant number. This determines
+            the time-step used in the simulation.
         :arg c: A positive real number denoting the speed of sound waves
             in dry air.
         :arg N: A positive real number describing the Brunt–Väisälä frequency.
@@ -39,9 +52,11 @@ class ExplicitSolver(object):
             Earth.
         :arg R: A positive real number denoting the radius of the spherical
             mesh (Earth-size).
+        :arg hexes: A boolean switch which determines if hexahedral elements
+            are to be used. Default is `False` (triangular prism elements).
         :arg rtol: The relative tolerance for the solver.
-        :arg inner_solver_type: A string describing which inner-most solver to
-            use on the pressure space (approximate Schur-complement) or the
+        :arg inner_pc_type: A string describing which inner-most preconditioner
+            to use on the pressure space (approximate Schur-complement) or the
             trace space (hybridization).
         :arg hybridization: A boolean switch between using a hybridized
             mixed method (True) on the velocity-pressure system, or GMRES
@@ -52,58 +67,160 @@ class ExplicitSolver(object):
             to `False`.
         """
 
-        self.hybridization = hybridization
-        self.monitor = monitor
-        self.rtol = rtol
+        self._R = R
+        self._refinements = refinements
+        self._nlayers = num_layers
+        self._hexes = hexes
 
-        if inner_solver_type == "gamg":
-            self.params = self.gamg_paramters
-        elif inner_solver_type == "hypre":
-            self.params = self.hypre_parameters
-        elif inner_solver_type == "direct":
-            self.params = self.direct_parameters
+        # Create horizontal base mesh
+        mesh_degree = 3
+        if self._hexes:
+            base = CubedSphereMesh(self._R,
+                                   refinement_level=self._refinements,
+                                   degree=mesh_degree)
         else:
-            raise ValueError("Unknown inner solver type")
+            base = IcosahedralSphereMesh(self._R,
+                                         refinement_level=self._refinements,
+                                         degree=mesh_degree)
+        self._base = base
 
-        # Timestepping parameters and physical constants
-        self._dt = dt
+        # Thickness of spherical shell (m)
+        thickness = 1.0e4
+
+        # Create extruded sphere mesh
+        mesh = ExtrudedMesh(self._base,
+                            extrusion_type="radial",
+                            layers=self._nlayers,
+                            layer_height=thickness/self._nlayers)
+        self._mesh = mesh
+
+        # Get horizontal Dx information (this is approximate).
+        # We compute the area (m^2) of each cell in the mesh,
+        # then take the square root to get the right units.
+        cell_vs = interpolate(CellVolume(self._base),
+                              FunctionSpace(self._base, "DG", 0))
+
+        a_min = cell_vs.dat.data.min()
+        a_max = cell_vs.dat.data.max()
+        dx_min = sqrt(a_min)
+        dx_max = sqrt(a_max)
+        dx_avg = (dx_min + dx_max)/2.0
+        self._dx_min = dx_min
+        self._dx_max = dx_max
+        self._dx_avg = dx_avg
+
+        # Speed of sound (m/s)
         self._c = c
-        self._N = N
-        self._dt_half = Constant(0.5*dt)
-        self._dt_half_N2 = Constant(0.5*dt*N**2)
-        self._dt_half_c2 = Constant(0.5*dt*c**2)
-        self._omega_N2 = Constant((0.5*dt*N)**2)
-        self._omega_c2 = Constant((0.5*dt*c)**2)
 
-        # Compatible finite element spaces
+        # Horizontal acoustic Courant number
+        self._nu_cfl = nu_cfl
+
+        # Compute time-step size (s)
+        dt = (self._nu_cfl / self._c) * self._dx_max
+        self._dt = dt
+
+        # Physical constants and timestepping parameters
+        self._N = N            # Buoyancy frequency
+        self._Omega = Omega    # Angular rotation rate
+        self._dt_half = Constant(0.5*self._dt)
+        self._dt_half_N2 = Constant(0.5*self._dt*self._N**2)
+        self._dt_half_c2 = Constant(0.5*self._dt*self._c**2)
+        self._omega_N2 = Constant((0.5*self._dt*self._N)**2)
+        self._omega_c2 = Constant((0.5*self._dt*self._c)**2)
+
+        # Build compatible finite element function spaces
+        self._order = order
+        W2, W3, Wb, W2v = construct_spaces(mesh=self._mesh,
+                                           order=self._order,
+                                           hexes=self._hexes)
         self._Wmixed = W2 * W3
         self._W2 = self._Wmixed.sub(0)
         self._W3 = self._Wmixed.sub(1)
         self._Wb = Wb
+        self._W2v = W2v
 
-        # Functions for state solutions
-        self._up = Function(self._Wmixed)
-        self._b = Function(self._Wb)
-        self._btmp = Function(self._Wb)
-
-        self._state = Function(self._W2 * self._W3 * self._Wb, name="State")
-
-        # Outward normal vector
-        mesh = self._W3.mesh()
-        x = SpatialCoordinate(mesh)
-        R = sqrt(inner(x, x))
-        self._khat = interpolate(x/R, mesh.coordinates.function_space())
+        # Outward normal vector field
+        x = SpatialCoordinate(self._mesh)
+        xnorm = sqrt(inner(x, x))
+        self._khat = interpolate(x/xnorm, mesh.coordinates.function_space())
 
         # Coriolis term
-        fexpr = 2*Omega*x[2]/R
-        Vcg = FunctionSpace(mesh, "CG", 1)
+        fexpr = 2*self._Omega*x[2]/xnorm
+        Vcg = FunctionSpace(self._mesh, "CG", mesh_degree)
         self._f = interpolate(fexpr, Vcg)
+
+        # Solver details
+        self._hybridization = hybridization
+        self._monitor = monitor
+        self._rtol = rtol
+
+        # Solver parameters
+        if inner_pc_type == "gamg":
+            self._params = self.gamg_paramters
+        elif inner_pc_type == "hypre":
+            self._params = self.hypre_parameters
+        elif inner_pc_type == "direct":
+            self._params = self.direct_parameters
+        else:
+            raise ValueError("Unknown inner PC type")
+
+        # Functions for state solutions
+        self._up = Function(self._Wmixed, name="Velocity-Pressure")
+        self._btmp = Function(self._Wb, name="Buoyancy update")
+        self._state = Function(self._W2 * self._W3 * self._Wb, name="State")
+
+        # Function to store u-p residual
+        self._up_residual = Function(self._Wmixed, name="U-P-Residual")
+
+        # Build initial conditions for this particular problem
+        self._build_initial_conditions()
 
         # Construct linear solvers
         self._build_up_solver()
         self._build_b_solver()
 
-        self.up_residual_reductions = []
+        # Keep record of iterations and reductions
+        self._sim_time = []
+        self._up_residual_reductions = []
+        self._outer_ksp_iterations = []
+        self._inner_ksp_iterations = []
+
+    @cached_property
+    def comm(self):
+        return self._mesh.comm
+
+    @cached_property
+    def num_cells(self):
+        return self._mesh.cell_set.size
+
+    @cached_property
+    def name(self):
+        name = "GW(cfl=%s, hybrid=%s, hexes=%s, cells=%s)" % (
+            self._nu_cfl, self._hybridization,
+            self._hexes, self.num_cells
+        )
+        return name
+
+    @cached_property
+    def output_file(self):
+        dirname = "results/GW_r%s_nl%s_cfl%s" % (self._refinements,
+                                                 self._nlayers,
+                                                 self._nu_cfl)
+        if self._hybridization:
+            dirname += "_hybridization"
+
+        if self._hexes:
+            dirname += "_hexes"
+
+        return File(dirname + "/lgw_" + str(self._refinements) + ".pvd")
+
+    def write(self, dumpcount, dumpfreq):
+        dumpcount += 1
+        un, pn, bn = self._state.split()
+        if dumpcount > dumpfreq:
+            self.output_file.write(un, pn, bn)
+            dumpcount -= dumpfreq
+        return dumpcount
 
     @cached_property
     def direct_parameters(self):
@@ -113,7 +230,7 @@ class ExplicitSolver(object):
                         'pc_type': 'lu',
                         'pc_factor_mat_solver_package': 'mumps'}
 
-        if self.hybridization:
+        if self._hybridization:
             params = {'ksp_type': 'preonly',
                       'mat_type': 'matfree',
                       'pc_type': 'python',
@@ -136,7 +253,7 @@ class ExplicitSolver(object):
         """
 
         inner_params = {'ksp_type': 'cg',
-                        'ksp_rtol': self.rtol,
+                        'ksp_rtol': self._rtol,
                         'pc_type': 'hypre',
                         'pc_hypre_type': 'boomeramg',
                         'pc_hypre_boomeramg_no_CF': False,
@@ -147,10 +264,10 @@ class ExplicitSolver(object):
                         'pc_hypre_boomeramg_max_level': 5,
                         'pc_hypre_boomeramg_strong_threshold': 0.25}
 
-        if self.monitor:
+        if self._monitor:
             inner_params['ksp_monitor_true_residual'] = True
 
-        if self.hybridization:
+        if self._hybridization:
             params = {'ksp_type': 'preonly',
                       'mat_type': 'matfree',
                       'pc_type': 'python',
@@ -158,7 +275,7 @@ class ExplicitSolver(object):
                       'hybridization': inner_params}
         else:
             params = {'ksp_type': 'gmres',
-                      'ksp_rtol': self.rtol,
+                      'ksp_rtol': self._rtol,
                       'pc_type': 'fieldsplit',
                       'pc_fieldsplit_type': 'schur',
                       'ksp_max_it': 100,
@@ -169,7 +286,7 @@ class ExplicitSolver(object):
                                        'pc_type': 'bjacobi',
                                        'sub_pc_type': 'ilu'},
                       'fieldsplit_1': inner_params}
-            if self.monitor:
+            if self._monitor:
                 params['ksp_monitor_true_residual'] = True
 
         return params
@@ -182,15 +299,15 @@ class ExplicitSolver(object):
 
         inner_params = {'ksp_type': 'cg',
                         'pc_type': 'gamg',
-                        'ksp_rtol': self.rtol,
+                        'ksp_rtol': self._rtol,
                         'mg_levels': {'ksp_type': 'chebyshev',
-                                      'ksp_max_it': 2,
+                                      'ksp_max_it': 1,
                                       'pc_type': 'bjacobi',
                                       'sub_pc_type': 'ilu'}}
-        if self.monitor:
+        if self._monitor:
             inner_params['ksp_monitor_true_residual'] = True
 
-        if self.hybridization:
+        if self._hybridization:
             params = {'ksp_type': 'preonly',
                       'mat_type': 'matfree',
                       'pc_type': 'python',
@@ -198,7 +315,7 @@ class ExplicitSolver(object):
                       'hybridization': inner_params}
         else:
             params = {'ksp_type': 'gmres',
-                      'ksp_rtol': self.rtol,
+                      'ksp_rtol': self._rtol,
                       'pc_type': 'fieldsplit',
                       'pc_fieldsplit_type': 'schur',
                       'ksp_max_it': 100,
@@ -209,22 +326,85 @@ class ExplicitSolver(object):
                                        'pc_type': 'bjacobi',
                                        'sub_pc_type': 'ilu'},
                       'fieldsplit_1': inner_params}
-            if self.monitor:
+            if self._monitor:
                 params['ksp_monitor_true_residual'] = True
 
         return params
 
-    @cached_property
-    def _build_up_bilinear_form(self):
-        """Bilinear form for the gravity wave velocity-pressure
-        subsystem.
-        """
+    def _build_initial_conditions(self):
+        """Constructs initial conditions."""
+
+        # Initial condition for velocity
+        u0 = Function(self._W2)
+        x = SpatialCoordinate(self._mesh)
+        u_max = 20.    # Maximal zonal wind (m/s)
+        uexpr = as_vector([-u_max*x[1]/self._R,
+                           u_max*x[0]/self._R, 0.0])
+        u0.project(uexpr)
+
+        # Initial condition for buoyancy
+        lamda_c = 2.0*np.pi/3.0
+        phi_c = 0.0
+        W_CG1 = FunctionSpace(self._mesh, "CG", 1)
+
+        z_expr = Expression("sqrt(x[0]*x[0]+x[1]*x[1]+x[2]*x[2]) - a",
+                            a=self._R)
+        z = Function(W_CG1).interpolate(z_expr)
+
+        lat_expr = Expression("asin(x[2]/sqrt(x[0]*x[0]+x[1]*x[1]+x[2]*x[2]))")
+        lat = Function(W_CG1).interpolate(lat_expr)
+        lon = Function(W_CG1).interpolate(Expression("atan2(x[1], x[0])"))
+        b0 = Function(self._Wb)
+        deltaTheta = 1.0
+        L_z = 20000.0
+        d = 5000.0
+
+        sin_tmp = sin(lat) * sin(phi_c)
+        cos_tmp = cos(lat) * cos(phi_c)
+
+        r = self._R*acos(sin_tmp + cos_tmp*cos(lon-lamda_c))
+        s = (d**2)/(d**2 + r**2)
+
+        bexpr = deltaTheta*s*sin(2*np.pi*z/L_z)
+        b0.interpolate(bexpr)
+
+        # Initial condition for pressure
+        p0 = Function(self._W3).assign(0.0)
+        p_eq = 1000.0 * 100.0
+        g = 9.810616
+        R_d = 287.0
+        T_eq = 300.0
+        c_p = 1004.5
+        kappa = R_d / c_p
+        G = g**2/(self._N**2*c_p)
+        tsexpr = G + (T_eq - G)*exp(
+            -(u_max*self._N**2/(4*g*g))*u_max*(cos(2.0*lat) - 1.0)
+        )
+        Ts = Function(W_CG1).interpolate(tsexpr)
+
+        tk = (Ts/T_eq)**(1.0/kappa)
+        psexp = p_eq*exp((u_max/(4.0*G*R_d))*u_max*(cos(2.0*lat)-1.0))*tk
+        p0.interpolate(psexp)
+
+        self._initial_state = (u0, p0, b0)
+
+    def _build_up_solver(self):
+        """Constructs the solver for the velocity-pressure increments."""
+
+        from firedrake.assemble import create_assembly_callable
+
+        # strong no-slip boundary conditions on the top
+        # and bottom of the atmospheric domain
+        bcs = [DirichletBC(self._Wmixed.sub(0), 0.0, "bottom"),
+               DirichletBC(self._Wmixed.sub(0), 0.0, "top")]
+
+        un, pn, bn = self._state.split()
 
         utest, ptest = TestFunctions(self._Wmixed)
         u, p = TrialFunctions(self._Wmixed)
 
-        def outward(u):
-            return cross(self._khat, u)
+        def outward(arg):
+            return cross(self._khat, arg)
 
         # Linear gravity wave system for the velocity and pressure
         # increments (buoyancy has been eliminated in the discrete
@@ -237,54 +417,23 @@ class ExplicitSolver(object):
                    + self._omega_N2
                    * dot(utest, self._khat)
                    * dot(u, self._khat))) * dx
-        return a_up
 
-    def _build_up_rhs(self, u0, p0, b0):
-        """Right-hand side for the gravity wave velocity-pressure
-        subsystem.
-        """
-
-        def outward(u):
-            return cross(self._khat, u)
-
-        utest, ptest = TestFunctions(self._Wmixed)
-        L_up = (dot(utest, u0)
-                + self._dt_half*dot(utest, self._f*outward(u0))
-                + self._dt_half*dot(utest, self._khat*b0)
-                + ptest*p0) * dx
-
-        return L_up
-
-    def up_residual(self, old_state, new_up):
-        """Returns the residual of the velocity-pressure system."""
-
-        u0, p0, b0 = old_state.split()
-        res = self._build_up_rhs(u0, p0, b0)
-        L = self._build_up_bilinear_form
-        res -= action(L, new_up)
-
-        return res
-
-    def _build_up_solver(self):
-        """Constructs the solver for the velocity-pressure increments."""
-
-        # strong no-slip boundary conditions on the top
-        # and bottom of the atmospheric domain
-        bcs = [DirichletBC(self._Wmixed.sub(0), 0.0, "bottom"),
-               DirichletBC(self._Wmixed.sub(0), 0.0, "top")]
-
-        un, pn, bn = self._state.split()
-
-        a_up = self._build_up_bilinear_form
-        L_up = self._build_up_rhs(un, pn, bn)
+        L_up = (dot(utest, un)
+                + self._dt_half*dot(utest, self._f*outward(un))
+                + self._dt_half*dot(utest, self._khat*bn)
+                + ptest*pn) * dx
 
         # Set up linear solver
         up_problem = LinearVariationalProblem(a_up, L_up,
                                               self._up, bcs=bcs)
-        params = self.params
+        params = self._params
         solver = LinearVariationalSolver(up_problem, solver_parameters=params,
                                          options_prefix='up-implicit-solver')
-        self.linear_solver = solver
+        self.up_solver = solver
+
+        r = action(a_up, self._up) - L_up
+        self._assemble_upr = create_assembly_callable(r,
+                                                      tensor=self._up_residual)
 
     def _build_b_solver(self):
         """Constructs the solver for the buoyancy update."""
@@ -301,7 +450,7 @@ class ExplicitSolver(object):
         b_params = {'ksp_type': 'cg',
                     'pc_type': 'bjacobi',
                     'sub_pc_type': 'ilu'}
-        if self.monitor:
+        if self._monitor:
             b_params['ksp_monitor_true_residual'] = True
 
         # Solver for buoyancy update
@@ -309,51 +458,110 @@ class ExplicitSolver(object):
                                            solver_parameters=b_params)
         self.b_solver = b_solver
 
-    def initialize(self, u, p, b):
+    def _initialize(self):
         """Initialized the solver state with initial conditions
         for the velocity, pressure, and buoyancy fields.
-
-        :arg u: An initial condition (`firedrake.Function`)
-                for the velocity field.
-        :arg p: An initial condition for the pressure field.
-        :arg b: And finally an function describing the initial
-                state of the buoyancy field.
         """
 
-        u0, p0, b0 = self._state.split()
-        u0.assign(u)
-        p0.assign(p)
-        b0.assign(b)
+        u, p, b = self._state.split()
+        u0, p0, b0 = self._initial_state
 
-    def solve(self):
-        """Solves the linear gravity wave problem at a particular
-        time-step in two-stages. First, the velocity and pressure
-        solutions are computed, then buoyancy is reconstructed from
-        the computed fields. The solver state is then updated.
-        """
+        u.assign(u0)
+        p.assign(p0)
+        b.assign(b0)
 
-        # Previous state
+    def warmup(self):
+        """Warm up solver by taking one time-step."""
+
+        self._initialize()
         un, pn, bn = self._state.split()
 
-        # Initial residual
         self._up.assign(0.0)
-        self._b.assign(0.0)
-        r0 = assemble(self.up_residual(self._state, self._up))
+        with timed_stage("Warmup: Velocity-Pressure-Solve"):
+            self.up_solver.solve()
 
-        # Main solver stage
-        with timed_stage("Velocity-Pressure-Solve"):
-            self.linear_solver.solve()
-
-        # Residual after solving
-        rn = assemble(self.up_residual(self._state, self._up))
-        self.up_residual_reductions.append(rn.dat.norm/r0.dat.norm)
-
-        # Update state
         un.assign(self._up.sub(0))
         pn.assign(self._up.sub(1))
 
-        # Reconstruct b
         self._btmp.assign(0.0)
-        with timed_stage("Buoyancy-Solve"):
+        with timed_stage("Warmup: Buoyancy-Solve"):
             self.b_solver.solve()
             bn.assign(assemble(bn - self._dt_half_N2*self._btmp))
+
+    def run_simulation(self, tmax, write=False, dumpfreq=100):
+        PETSc.Sys.Print("""
+        Running linear Boussinesq simulation with parameters:\n
+        Hybridization: %s,\n
+        Model order: %s,\n
+        Refinements: %s,\n
+        Layers: %s,\n
+        Number of cells: %s,\n
+        Horizontal Courant number: %s,\n
+        Approx. Delta x (m): %s,\n
+        Time-step size (s): %s,\n
+        Stop time (s): %s.
+        """ % (self._hybridization, self._order, self._refinements,
+               self._nlayers, self.num_cells, self._nu_cfl, self._dx_avg,
+               self._dt, tmax))
+
+        t = 0.0
+        self._initialize()
+        un, pn, bn = self._state.split()
+
+        dumpcount = dumpfreq
+        if write:
+            dumpcount = self.write(dumpcount, dumpfreq)
+
+        self.up_solver.snes.setConvergenceHistory()
+        self.up_solver.snes.ksp.setConvergenceHistory()
+        self.b_solver.snes.setConvergenceHistory()
+        self.b_solver.snes.ksp.setConvergenceHistory()
+
+        while t < tmax:
+            t += self._dt
+            self._sim_time.append(t)
+
+            # Solve for new u and p field
+            self._up.assign(0.0)
+            with timed_stage("Velocity-Pressure-Solve"):
+                self.up_solver.solve()
+
+            # Update state with new u and p
+            un.assign(self._up.sub(0))
+            pn.assign(self._up.sub(1))
+
+            # Reconstruct b using new u and p
+            self._btmp.assign(0.0)
+            with timed_stage("Buoyancy-Solve"):
+                self.b_solver.solve()
+                bn.assign(assemble(bn - self._dt_half_N2*self._btmp))
+
+            # Collect residual reductions for u-p system
+            r0 = self.up_solver.snes.ksp.getRhs()
+
+            # Assemble u-p residual
+            self._assemble_upr()
+            rn = self._up_residual
+
+            r0norm = r0.norm()
+            rnnorm = rn.dat.norm
+            reduction = rnnorm/r0norm
+            self._up_residual_reductions.append(reduction)
+
+            # Collect KSP iterations
+            outer_ksp = self.up_solver.snes.ksp
+            if self._hybridization:
+                ctx = outer_ksp.getPC().getPythonContext()
+                inner_ksp = ctx.trace_ksp
+            else:
+                ksps = outer_ksp.getPC().getFieldSplitSubKSP()
+                _, inner_ksp = ksps
+
+            outer_its = outer_ksp.getIterationNumber()
+            inner_its = inner_ksp.getIterationNumber()
+            self._outer_ksp_iterations.append(outer_its)
+            self._inner_ksp_iterations.append(inner_its)
+
+            if write:
+                with timed_stage("Dump output"):
+                    dumpcount = self.write(dumpcount, dumpfreq)
