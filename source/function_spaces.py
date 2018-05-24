@@ -4,7 +4,7 @@ from firedrake import *
 __all__ = ["construct_spaces"]
 
 
-def construct_spaces(mesh, order=1):
+def construct_spaces(mesh, order=1, hexes=False):
     """Builds the compatible finite element spaces
     for the linear compressible gravity wave system.
 
@@ -19,25 +19,22 @@ def construct_spaces(mesh, order=1):
 
     :arg mesh: An extruded mesh.
     :arg order: Integer denoting the order of the
-                element spaces. Default is `1`, which
-                corresponds to a lowest-order method.
+        element spaces. Default is `1`, which
+        corresponds to a lowest-order method.
+    :arg hexes: A boolean denoting whether or not
+        to use hexahedral elements.
     """
 
     assert order >= 1
 
     # Horizontal elements
-    if mesh._base_mesh.ufl_cell().cellname() == 'quadrilateral':
+    if hexes:
         U1 = FiniteElement('RTCF', quadrilateral, order)
         U2 = FiniteElement('DQ', quadrilateral, order - 1)
 
-    elif mesh._base_mesh.ufl_cell().cellname() == 'triangle':
+    else:
         U1 = FiniteElement('RT', triangle, order)
         U2 = FiniteElement('DG', triangle, order - 1)
-
-    else:
-        assert mesh._base_mesh.ufl_cell().cellname() == 'interval'
-        U1 = FiniteElement('CG', interval, order)
-        U2 = FiniteElement('DG', interval, order - 1)
 
     # Vertical elements
     V0 = FiniteElement('CG', interval, order)
