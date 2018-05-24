@@ -1,14 +1,16 @@
-from firedrake import *
+from firedrake import COMM_WORLD, parameters
 from firedrake.petsc import PETSc
-from function_spaces import construct_spaces
-from solver import ExplicitSolver
+from pyop2.profiling import timed_stage
 from argparse import ArgumentParser
-import math
-import numpy as np
-import sys
+from mpi4py import MPI
+import pandas as pd
+
+import solver as module
 
 
-PETSc.Log.begin()
+parameters["pyop2_options"]["lazy_evaluation"] = False
+
+
 parser = ArgumentParser(description="""Linear gravity wave system.""",
                         add_help=False)
 
@@ -18,17 +20,21 @@ parser.add_argument("--refinements",
                     help=("Number of refinements when generating the "
                           "spherical base mesh."))
 
-parser.add_argument("--extrusion_levels",
+parser.add_argument("--num_layers",
                     default=20,
                     type=int,
                     help="Number of vertical levels in the extruded mesh.")
+
+parser.add_argument("--hexes",
+                    action="store_true",
+                    help="Use hexahedral elements.")
 
 parser.add_argument("--hybridization",
                     action="store_true",
                     help=("Use a hybridized mixed method to solve the "
                           "gravity wave equations."))
 
-parser.add_argument("--inner_solver_type",
+parser.add_argument("--inner_pc_type",
                     default="gamg",
                     choices=["hypre", "gamg", "direct"],
                     help="Solver type for the linear solver.")
@@ -38,7 +44,7 @@ parser.add_argument("--nu_cfl",
                     type=int,
                     help="Value for the horizontal courant number.")
 
-parser.add_argument("--num_timesteps",
+parser.add_argument("--nsteps",
                     default=1,
                     type=int,
                     help="Number of time steps to take.")
@@ -49,7 +55,7 @@ parser.add_argument("--order",
                     help="Order of the compatible mixed method.")
 
 parser.add_argument("--rtol",
-                    default=1.0E-8,
+                    default=1.0e-6,
                     type=float,
                     help="Rtolerance for the linear solve.")
 
@@ -61,17 +67,19 @@ parser.add_argument("--profile",
                     action="store_true",
                     help="Turn on profiler for simulation timings.")
 
-parser.add_argument("--output",
+parser.add_argument("--write_output",
                     action="store_true",
                     help="Write output.")
+
+parser.add_argument("--dumpfreq",
+                    default=10,
+                    type=int,
+                    action="store",
+                    help="Dump frequency of output.")
 
 parser.add_argument("--monitor",
                     action="store_true",
                     help="Turn on KSP monitors")
-
-parser.add_argument("--write_data",
-                    action="store_true",
-                    help="Write out residual data.")
 
 parser.add_argument("--help",
                     action="store_true",
@@ -80,128 +88,292 @@ parser.add_argument("--help",
 args, _ = parser.parse_known_args()
 
 if args.help:
+    import sys
     help = parser.format_help()
     PETSc.Sys.Print("%s\n" % help)
     sys.exit(1)
 
+PETSc.Log.begin()
+
+
+def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
+                      order, nsteps, hybridization, inner_pc_type, rtol,
+                      monitor=False, write=False, cold=False):
+
+    # Radius of earth (scaled, m)
+    r_earth = 6.371e6/125.0
+
+    # Speed of sound (m/s)
+    c = 300.0
+
+    # Buoyancy frequency
+    N = 0.01
+
+    # Angular rotation rate
+    Omega = 7.292e-5
+
+    if cold:
+        PETSc.Sys.Print("""
+        Running cold initialization with parameters:\n
+        Horizontal Courant number: %s,\n
+        Horizontal refinements: %s,\n
+        Vertical layers: %s,\n
+        Hexes: %s,\n
+        Discretization order: %s,\n
+        Hybridization: %s,\n
+        Inner PC type: %s,\n
+        rtol: %s.
+        """ % (nu_cfl, refinements, num_layers, hexes,
+               order, hybridization, inner_pc_type, rtol))
+        problem = problem_cls(order=order,
+                              refinements=refinements,
+                              num_layers=num_layers,
+                              nu_cfl=nu_cfl,
+                              c=c,
+                              N=N,
+                              Omega=Omega,
+                              R=r_earth,
+                              rtol=rtol,
+                              hexes=hexes,
+                              inner_pc_type=inner_pc_type,
+                              hybridization=hybridization,
+                              monitor=monitor)
+        problem.warmup()
+        return
+
+    problem = problem_cls(order=order,
+                          refinements=refinements,
+                          num_layers=num_layers,
+                          nu_cfl=nu_cfl,
+                          c=c,
+                          N=N,
+                          Omega=Omega,
+                          R=r_earth,
+                          rtol=rtol,
+                          hexes=hexes,
+                          inner_pc_type=inner_pc_type,
+                          hybridization=hybridization,
+                          monitor=monitor)
+    comm = problem.comm
+
+    PETSc.Sys.Print("Warmup with one step.\n")
+    with timed_stage("Warmup %s" % problem.name):
+        problem.warmup()
+        PETSc.Log.Stage("Warmup: Velocity-Pressure-Solve").push()
+        prepcsetup = PETSc.Log.Event("PCSetUp").getPerfInfo()
+        pre_res_eval = PETSc.Log.Event("SNESFunctionEval").getPerfInfo()
+        pre_jac_eval = PETSc.Log.Event("SNESJacobianEval").getPerfInfo()
+
+        pre_res_eval_time = comm.allreduce(pre_res_eval["time"],
+                                           op=MPI.SUM) / comm.size
+        pre_jac_eval_time = comm.allreduce(pre_jac_eval["time"],
+                                           op=MPI.SUM) / comm.size
+        pre_setup_time = comm.allreduce(prepcsetup["time"],
+                                        op=MPI.SUM) / comm.size
+
+        if problem._hybridization:
+            prehybridinit = PETSc.Log.Event("HybridInit").getPerfInfo()
+            prehybridinit_time = comm.allreduce(prehybridinit["time"],
+                                                op=MPI.SUM) / comm.size
+
+        PETSc.Log.Stage("Warmup: Velocity-Pressure-Solve").pop()
+
+    PETSc.Sys.Print("Running simulation for %s time-steps\n" % nsteps)
+    tmax = nsteps * problem._dt
+    problem.run_simulation(tmax, write=write, dumpfreq=args.dumpfreq)
+    PETSc.Sys.Print("Simulation complete.\n")
+
+    PETSc.Log.Stage("Velocity-Pressure-Solve").push()
+
+    snes = PETSc.Log.Event("SNESSolve").getPerfInfo()
+    ksp = PETSc.Log.Event("KSPSolve").getPerfInfo()
+    pcsetup = PETSc.Log.Event("PCSetUp").getPerfInfo()
+    pcapply = PETSc.Log.Event("PCApply").getPerfInfo()
+    jac_eval = PETSc.Log.Event("SNESJacobianEval").getPerfInfo()
+    residual = PETSc.Log.Event("SNESFunctionEval").getPerfInfo()
+
+    snes_time = comm.allreduce(snes["time"], op=MPI.SUM) / comm.size
+    ksp_time = comm.allreduce(ksp["time"], op=MPI.SUM) / comm.size
+    pc_setup_time = comm.allreduce(pcsetup["time"], op=MPI.SUM) / comm.size
+    pc_apply_time = comm.allreduce(pcapply["time"], op=MPI.SUM) / comm.size
+    jac_eval_time = comm.allreduce(jac_eval["time"], op=MPI.SUM) / comm.size
+    res_eval_time = comm.allreduce(residual["time"], op=MPI.SUM) / comm.size
+
+    ref = problem._refinements
+    num_cells = comm.allreduce(problem.num_cells, op=MPI.SUM)
+
+    if problem._hybridization:
+        results_data = "hybrid_order%s_data_GW_ref%d_cfl%s_NS%d" % (
+            problem._order,
+            ref,
+            nu_cfl,
+            nsteps
+        )
+        results_timings = "hybrid_order%s_profile_GW_ref%d_cfl%s_NS%d" % (
+            problem._order,
+            ref,
+            nu_cfl,
+            nsteps
+        )
+
+        RHS = PETSc.Log.Event("HybridRHS").getPerfInfo()
+        trace = PETSc.Log.Event("HybridSolve").getPerfInfo()
+        recover = PETSc.Log.Event("HybridRecover").getPerfInfo()
+        recon = PETSc.Log.Event("HybridRecon").getPerfInfo()
+        hybridbreak = PETSc.Log.Event("HybridBreak").getPerfInfo()
+        hybridupdate = PETSc.Log.Event("HybridUpdate").getPerfInfo()
+        hybridinit = PETSc.Log.Event("HybridInit").getPerfInfo()
+
+        recon_time = comm.allreduce(recon["time"], op=MPI.SUM) / comm.size
+        projection = comm.allreduce(recover["time"], op=MPI.SUM) / comm.size
+        transfer = comm.allreduce(hybridbreak["time"], op=MPI.SUM) / comm.size
+        full_recon = projection + recon_time
+        update_time = comm.allreduce(hybridupdate["time"],
+                                     op=MPI.SUM) / comm.size
+        trace_solve = comm.allreduce(trace["time"], op=MPI.SUM) / comm.size
+        rhstime = comm.allreduce(RHS["time"], op=MPI.SUM) / comm.size
+        inittime = comm.allreduce(hybridinit["time"],
+                                  op=MPI.SUM) / comm.size
+        other = ksp_time - (trace_solve + transfer
+                            + projection + recon_time + rhstime)
+        full_solve = (transfer + trace_solve + rhstime
+                      + recon_time + projection + update_time)
+    else:
+        results_data = "gmres_order%s_data_GW_ref%d_cfl%s_NS%d" % (
+            problem._order,
+            ref,
+            nu_cfl,
+            nsteps
+        )
+        results_timings = "gmres_order%s_profile_GW_ref%d_cfl%s_NS%d" % (
+            problem._order,
+            ref,
+            nu_cfl,
+            nsteps
+        )
+
+        KSPSchur = PETSc.Log.Event("KSPSolve_FS_Schu").getPerfInfo()
+        KSPF0 = PETSc.Log.Event("KSPSolve_FS_0").getPerfInfo()
+        KSPLow = PETSc.Log.Event("KSPSolve_FS_Low").getPerfInfo()
+
+        schur_time = comm.allreduce(KSPSchur["time"], op=MPI.SUM) / comm.size
+        f0_time = comm.allreduce(KSPF0["time"], op=MPI.SUM) / comm.size
+        ksplow_time = comm.allreduce(KSPLow["time"], op=MPI.SUM) / comm.size
+        other = ksp_time - (schur_time + f0_time + ksplow_time)
+
+    PETSc.Log.Stage("Velocity-Pressure-Solve").pop()
+
+    if hexes:
+        results_data += "_hexes.csv"
+        results_timings += "_hexes.csv"
+    else:
+        results_data += ".csv"
+        results_timings += ".csv"
+
+    if COMM_WORLD.rank == 0:
+        data = {"OuterIters": problem._outer_ksp_iterations,
+                "InnerIters": problem._inner_ksp_iterations,
+                "SimTime": problem._sim_time,
+                "ResidualReductions": problem._up_residual_reductions}
+
+        total_dofs = problem._state.dof_dset.layout_vec.getSize()
+        up_dofs = problem._up.dof_dset.layout_vec.getSize()
+
+        time_data = {"PETSCLogKSPSolve": ksp_time,
+                     "PETSCLogPCApply": pc_apply_time,
+                     "PETSCLogPCSetup": pc_setup_time,
+                     "PETSCLogPreSetup": pre_setup_time,
+                     "PETSCLogPreSNESJacobianEval": pre_jac_eval_time,
+                     "PETSCLogPreSNESFunctionEval": pre_res_eval_time,
+                     "SNESSolve": snes_time,
+                     "SNESFunctionEval": res_eval_time,
+                     "SNESJacobianEval": jac_eval_time,
+                     "num_processes": problem.comm.size,
+                     "order": problem._order,
+                     "refinement_level": problem._refinements,
+                     "vertical_layers": problem._nlayers,
+                     "total_dofs": total_dofs,
+                     "velocity_pressure_dofs": up_dofs,
+                     "num_cells": num_cells,
+                     "Dt": problem._dt,
+                     "NuCFL": nu_cfl,
+                     "DxMin": problem._dx_min,
+                     "DxMax": problem._dx_max,
+                     "DxAvg": problem._dx_avg}
+
+        if problem._hybridization:
+            updates = {"HybridTraceSolve": trace_solve,
+                       "HybridRHS": rhstime,
+                       "HybridBreak": transfer,
+                       "HybridReconstruction": recon_time,
+                       "HybridProjection": projection,
+                       "HybridFullRecovery": full_recon,
+                       "HybridUpdate": update_time,
+                       "HybridInit": inittime,
+                       "PreHybridInit": prehybridinit_time,
+                       "HybridFullSolveTime": full_solve,
+                       "HybridKSPOther": other}
+
+        else:
+            updates = {"KSPSchur": schur_time,
+                       "KSPF0": f0_time,
+                       "KSPFSLow": ksplow_time,
+                       "KSPother": other}
+
+        time_data.update(updates)
+
+        df_data = pd.DataFrame(data)
+        df_data.to_csv(results_data, index=False,
+                       mode="w", header=True)
+
+        df_time = pd.DataFrame(time_data, index=[0])
+        df_time.to_csv(results_timings, index=False,
+                       mode="w", header=True)
+
+
+GravityWaveProblem = module.GravityWaveProblem
 if args.profile:
-    # Ensures accurate timing of parallel loops
-    parameters["pyop2_options"]["lazy_evaluation"] = False
 
-# Number of vertical layers
-nlayer = args.extrusion_levels
+    # Cold run
+    run_gravity_waves(problem_cls=GravityWaveProblem,
+                      nu_cfl=args.nu_cfl,
+                      refinements=args.refinements,
+                      num_layers=args.num_layers,
+                      hexes=args.hexes,
+                      order=args.order,
+                      nsteps=args.nsteps,
+                      hybridization=args.hybridization,
+                      inner_pc_type=args.inner_pc_type,
+                      rtol=args.rtol,
+                      monitor=False,
+                      write=False,
+                      cold=True)
 
-# Radius of earth (scaled)
-r_earth = 6.371e6/125.0
-
-# Thickness of spherical shell
-thickness = 1.0e4
-
-order = args.order
-reflvl = args.refinements
-
-base = IcosahedralSphereMesh(r_earth,
-                             refinement_level=reflvl,
-                             degree=3)
-
-# Extruded mesh
-mesh = ExtrudedMesh(base, extrusion_type='radial',
-                    layers=nlayer, layer_height=thickness/nlayer)
-
-# Compatible finite element spaces
-W2, W3, Wb, _ = construct_spaces(mesh, order=order)
-
-# Physical constants and time-stepping parameters
-c = 343
-N = 0.01
-Omega = 7.292e-5
-nu_cfl = args.nu_cfl
-num_cells = mesh.cell_set.size
-Dx = 2.*r_earth/math.sqrt(3.)*math.sqrt(4.*math.pi/(num_cells))
-dt = nu_cfl/c*Dx
-
-# Initial condition for velocity
-u0 = Function(W2)
-x = SpatialCoordinate(mesh)
-u_max = 20.
-uexpr = as_vector([-u_max*x[1]/r_earth,
-                   u_max*x[0]/r_earth, 0.0])
-u0.project(uexpr)
-
-# Initial condition for buoyancy
-lamda_c = 2.0*np.pi/3.0
-phi_c = 0.0
-W_CG1 = FunctionSpace(mesh, "CG", 1)
-
-z_expr = Expression("sqrt(x[0]*x[0] + x[1]*x[1] + x[2]*x[2]) - a", a=r_earth)
-z = Function(W_CG1).interpolate(z_expr)
-
-lat_expr = Expression("asin(x[2]/sqrt(x[0]*x[0] + x[1]*x[1] + x[2]*x[2]))")
-lat = Function(W_CG1).interpolate(lat_expr)
-lon = Function(W_CG1).interpolate(Expression("atan2(x[1], x[0])"))
-b0 = Function(Wb)
-deltaTheta = 1.0
-L_z = 20000.0
-d = 5000.0
-
-sin_tmp = sin(lat) * sin(phi_c)
-cos_tmp = cos(lat) * cos(phi_c)
-
-r = r_earth*acos(sin_tmp + cos_tmp*cos(lon-lamda_c))
-s = (d**2)/(d**2 + r**2)
-
-bexpr = deltaTheta*s*sin(2*np.pi*z/L_z)
-b0.interpolate(bexpr)
-
-# Initial condition for pressure
-p0 = Function(W3).assign(0.0)
-p_eq = 1000.0 * 100.0
-g = 9.810616
-R_d = 287.0
-T_eq = 300.0
-c_p = 1004.5
-kappa = 2.0/7.0
-G = g**2/(N**2*c_p)
-Ts = Function(W_CG1).interpolate(G + (T_eq-G)*exp(
-    -(u_max*N**2/(4*g*g))*u_max*(cos(2.0*lat)-1.0)))
-
-tk = (Ts/T_eq)**(1.0/kappa)
-psexp = p_eq*exp((u_max/(4.0*G*R_d))*u_max*(cos(2.0*lat)-1.0))*tk
-p0.interpolate(psexp)
-
-# Setup linear solvers
-solver = ExplicitSolver(W2, W3, Wb, dt, c, N, Omega, r_earth,
-                        monitor=args.monitor, rtol=args.rtol,
-                        hybridization=args.hybridization,
-                        inner_solver_type=args.inner_solver_type)
-
-# Initialize
-solver.initialize(u0, p0, b0)
-
-if args.test:
-    tmax = dt
+    # Now start profiler
+    run_gravity_waves(problem_cls=GravityWaveProblem,
+                      nu_cfl=args.nu_cfl,
+                      refinements=args.refinements,
+                      num_layers=args.num_layers,
+                      hexes=args.hexes,
+                      order=args.order,
+                      nsteps=args.nsteps,
+                      hybridization=args.hybridization,
+                      inner_pc_type=args.inner_pc_type,
+                      rtol=args.rtol,
+                      monitor=False,
+                      write=False,
+                      cold=False)
 else:
-    tmax = dt*args.num_timesteps
-
-# RUN!
-t = 0
-u, p, b = solver._state.split()
-
-if args.output:
-    output = File("results/gw3d/gw3d.pvd")
-    output.write(u, p, b)
-
-    while t < tmax:
-        t += dt
-        solver.solve()
-        u, p, b = solver._state.split()
-        output.write(u, p, b)
-else:
-    while t < tmax:
-        t += dt
-        solver.solve()
-
-if args.write_data:
-    PETSc.Sys.Print("""
-    Residuals reductions for the UP-system...\n
-    %s""" % solver.up_residual_reductions)
+    run_gravity_waves(problem_cls=GravityWaveProblem,
+                      nu_cfl=args.nu_cfl,
+                      refinements=args.refinements,
+                      num_layers=args.num_layers,
+                      hexes=args.hexes,
+                      order=args.order,
+                      nsteps=args.nsteps,
+                      hybridization=args.hybridization,
+                      inner_pc_type=args.inner_pc_type,
+                      rtol=args.rtol,
+                      monitor=args.monitor,
+                      write=args.write_output,
+                      cold=False)
