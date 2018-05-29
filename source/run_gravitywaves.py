@@ -276,8 +276,9 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
                 "SimTime": problem._sim_time,
                 "ResidualReductions": problem._up_residual_reductions}
 
-        total_dofs = problem._state.dof_dset.layout_vec.getSize()
         up_dofs = problem._up.dof_dset.layout_vec.getSize()
+        b_dofs = problem._btmp.dof_dset.layout_vec.getSize()
+        total_dofs = up_dofs + b_dofs
 
         time_data = {"PETSCLogKSPSolve": ksp_time,
                      "PETSCLogPCApply": pc_apply_time,

@@ -82,6 +82,9 @@ class GravityWaveProblem(object):
             base = IcosahedralSphereMesh(self._R,
                                          refinement_level=self._refinements,
                                          degree=mesh_degree)
+
+        global_normal = Expression(("x[0]", "x[1]", "x[2]"))
+        base.init_cell_orientations(global_normal)
         self._base = base
 
         # Thickness of spherical shell (m)
