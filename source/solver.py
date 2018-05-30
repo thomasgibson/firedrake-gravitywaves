@@ -73,15 +73,16 @@ class GravityWaveProblem(object):
         self._hexes = hexes
 
         # Create horizontal base mesh
-        mesh_degree = 3
+        mesh_degree = 1
         if self._hexes:
             base = CubedSphereMesh(self._R,
                                    refinement_level=self._refinements,
                                    degree=mesh_degree)
         else:
-            base = IcosahedralSphereMesh(self._R,
-                                         refinement_level=self._refinements,
-                                         degree=mesh_degree)
+            base = OctahedralSphereMesh(self._R,
+                                        refinement_level=self._refinements,
+                                        degree=mesh_degree,
+                                        hemisphere="both")
 
         global_normal = Expression(("x[0]", "x[1]", "x[2]"))
         base.init_cell_orientations(global_normal)
@@ -305,7 +306,7 @@ class GravityWaveProblem(object):
                         'pc_gamg_reuse_interpolation': True,
                         'ksp_rtol': self._rtol,
                         'mg_levels': {'ksp_type': 'chebyshev',
-                                      'ksp_max_it': 2,
+                                      'ksp_max_it': 1,
                                       'pc_type': 'bjacobi',
                                       'sub_pc_type': 'ilu'}}
         if self._monitor:
