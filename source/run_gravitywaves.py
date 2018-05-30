@@ -59,10 +59,6 @@ parser.add_argument("--rtol",
                     type=float,
                     help="Rtolerance for the linear solve.")
 
-parser.add_argument("--test",
-                    action="store_true",
-                    help="Enable a quick test run with ksp monitors.")
-
 parser.add_argument("--profile",
                     action="store_true",
                     help="Turn on profiler for simulation timings.")
@@ -92,8 +88,6 @@ if args.help:
     help = parser.format_help()
     PETSc.Sys.Print("%s\n" % help)
     sys.exit(1)
-
-PETSc.Log.begin()
 
 
 def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
@@ -333,6 +327,7 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
 
 
 GravityWaveProblem = module.GravityWaveProblem
+PETSc.Log.begin()
 if args.profile:
 
     # Cold run
