@@ -79,10 +79,9 @@ class GravityWaveProblem(object):
                                    refinement_level=self._refinements,
                                    degree=mesh_degree)
         else:
-            base = OctahedralSphereMesh(self._R,
-                                        refinement_level=self._refinements,
-                                        degree=mesh_degree,
-                                        hemisphere="both")
+            base = IcosahedralSphereMesh(self._R,
+                                         refinement_level=self._refinements,
+                                         degree=mesh_degree)
 
         global_normal = Expression(("x[0]", "x[1]", "x[2]"))
         base.init_cell_orientations(global_normal)
@@ -192,6 +191,10 @@ class GravityWaveProblem(object):
     @cached_property
     def comm(self):
         return self._mesh.comm
+
+    @cached_property
+    def num_horizontal_cells(self):
+        return self._base.cell_set.size
 
     @cached_property
     def num_cells(self):
@@ -500,13 +503,12 @@ class GravityWaveProblem(object):
         Model order: %s,\n
         Refinements: %s,\n
         Layers: %s,\n
-        Number of cells: %s,\n
         Horizontal Courant number: %s,\n
         Approx. Delta x (m): %s,\n
         Time-step size (s): %s,\n
         Stop time (s): %s.
         """ % (self._hybridization, self._order, self._refinements,
-               self._nlayers, self.num_cells, self._nu_cfl, self._dx_avg,
+               self._nlayers, self._nu_cfl, self._dx_avg,
                self._dt, tmax))
 
         t = 0.0
