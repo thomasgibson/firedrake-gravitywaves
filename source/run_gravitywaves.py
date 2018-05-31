@@ -195,6 +195,8 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
 
     ref = problem._refinements
     num_cells = comm.allreduce(problem.num_cells, op=MPI.SUM)
+    horiz_cells = comm.allreduce(problem.num_horizontal_cells,
+                                 op=MPI.SUM)
 
     if problem._hybridization:
         results_data = "hybrid_order%s_data_GW_ref%d_cfl%s_NS%d" % (
@@ -290,6 +292,7 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
                      "total_dofs": total_dofs,
                      "velocity_pressure_dofs": up_dofs,
                      "num_cells": num_cells,
+                     "num_horizontal_cells": horiz_cells,
                      "Dt": problem._dt,
                      "NuCFL": nu_cfl,
                      "DxMin": problem._dx_min,
