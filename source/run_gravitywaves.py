@@ -73,6 +73,10 @@ parser.add_argument("--dumpfreq",
                     action="store",
                     help="Dump frequency of output.")
 
+parser.add_argument("--scale_r",
+                    action="store_true",
+                    help="Scale radius of the earth by 1/125")
+
 parser.add_argument("--monitor",
                     action="store_true",
                     help="Turn on KSP monitors")
@@ -94,8 +98,11 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
                       order, nsteps, hybridization, inner_pc_type, rtol,
                       monitor=False, write=False, cold=False):
 
-    # Radius of earth (scaled, m)
-    r_earth = 6.371e6/125.0
+    # Radius of earth (m)
+    if args.scale_r:
+        r_earth = 6.371e6/125.0
+    else:
+        r_earth = 6.371e6
 
     # Speed of sound (m/s)
     c = 343.0
