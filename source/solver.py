@@ -33,7 +33,8 @@ class GravityWaveProblem(object):
 
     def __init__(self, order, refinements, num_layers,
                  nu_cfl, c, N, Omega, R, rtol=1.0E-8,
-                 hexes=False, inner_pc_type="gamg", hybridization=False,
+                 hexes=False, inner_pc_type="gamg", inner_preonly=False,
+                 hybridization=False,
                  monitor=False):
         """The constructor for the GravityWaveProblem.
 
@@ -58,6 +59,8 @@ class GravityWaveProblem(object):
         :arg inner_pc_type: A string describing which inner-most preconditioner
             to use on the pressure space (approximate Schur-complement) or the
             trace space (hybridization).
+        :arg inner_preonly: A boolean denoting whether to use a preonly
+            configuration for the inner solve.
         :arg hybridization: A boolean switch between using a hybridized
             mixed method (True) on the velocity-pressure system, or GMRES
             with an approximate Schur-complement preconditioner (False).
@@ -158,6 +161,7 @@ class GravityWaveProblem(object):
         self._rtol = rtol
 
         # Solver parameters
+        self._inner_preonly = inner_preonly
         if inner_pc_type == "gamg":
             self._params = self.gamg_paramters
         elif inner_pc_type == "hypre":
@@ -324,18 +328,40 @@ class GravityWaveProblem(object):
                       'pc_python_type': 'firedrake.HybridizationPC',
                       'hybridization': inner_params}
         else:
-            params = {'ksp_type': 'gmres',
-                      'ksp_rtol': self._rtol,
-                      'pc_type': 'fieldsplit',
-                      'pc_fieldsplit_type': 'schur',
-                      'ksp_max_it': 100,
-                      'ksp_gmres_restart': 50,
-                      'pc_fieldsplit_schur_fact_type': 'FULL',
-                      'pc_fieldsplit_schur_precondition': 'selfp',
-                      'fieldsplit_0': {'ksp_type': 'preonly',
-                                       'pc_type': 'bjacobi',
-                                       'sub_pc_type': 'ilu'},
-                      'fieldsplit_1': inner_params}
+            if self._inner_preonly:
+                params = {'ksp_type': 'gmres',
+                          'ksp_rtol': self._rtol,
+                          'pc_type': 'fieldsplit',
+                          'pc_fieldsplit_type': 'schur',
+                          'ksp_max_it': 100,
+                          'ksp_gmres_restart': 50,
+                          'pc_fieldsplit_schur_fact_type': 'FULL',
+                          'pc_fieldsplit_schur_precondition': 'selfp',
+                          'fieldsplit_0': {'ksp_type': 'preonly',
+                                           'pc_type': 'bjacobi',
+                                           'sub_pc_type': 'ilu'},
+                          'fieldsplit_1': {'ksp_type': 'preonly',
+                                           'pc_type': 'gamg',
+                                           'pc_gamg_reuse_interpolation': True,
+                                           'pc_gamg_sym_graph': True,
+                                           'mg_levels': {'ksp_type': 'chebyshev',
+                                                         'ksp_chebyshev_esteig': True,
+                                                         'ksp_max_it': 5,
+                                                         'pc_type': 'bjacobi',
+                                                         'sub_pc_type': 'ilu'}}}
+            else:
+                params = {'ksp_type': 'gmres',
+                          'ksp_rtol': self._rtol,
+                          'pc_type': 'fieldsplit',
+                          'pc_fieldsplit_type': 'schur',
+                          'ksp_max_it': 100,
+                          'ksp_gmres_restart': 50,
+                          'pc_fieldsplit_schur_fact_type': 'FULL',
+                          'pc_fieldsplit_schur_precondition': 'selfp',
+                          'fieldsplit_0': {'ksp_type': 'preonly',
+                                           'pc_type': 'bjacobi',
+                                           'sub_pc_type': 'ilu'},
+                          'fieldsplit_1': inner_params}
             if self._monitor:
                 params['ksp_monitor_true_residual'] = True
 

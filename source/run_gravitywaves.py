@@ -77,6 +77,10 @@ parser.add_argument("--scale_r",
                     action="store_true",
                     help="Scale radius of the earth by 1/125")
 
+parser.add_argument("--inner_preonly",
+                    action="store_true",
+                    help="Set inner KSP to preonly")
+
 parser.add_argument("--monitor",
                     action="store_true",
                     help="Turn on KSP monitors")
@@ -137,6 +141,7 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
                               rtol=rtol,
                               hexes=hexes,
                               inner_pc_type=inner_pc_type,
+                              inner_preonly=args.inner_preonly,
                               hybridization=hybridization,
                               monitor=monitor)
         problem.warmup()
@@ -153,6 +158,7 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
                           rtol=rtol,
                           hexes=hexes,
                           inner_pc_type=inner_pc_type,
+                          inner_preonly=args.inner_preonly,
                           hybridization=hybridization,
                           monitor=monitor)
     comm = problem.comm
