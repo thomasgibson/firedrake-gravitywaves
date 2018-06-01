@@ -98,7 +98,7 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
     r_earth = 6.371e6/125.0
 
     # Speed of sound (m/s)
-    c = 300.0
+    c = 343.0
 
     # Buoyancy frequency
     N = 0.01
