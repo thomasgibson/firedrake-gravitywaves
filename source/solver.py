@@ -73,7 +73,7 @@ class GravityWaveProblem(object):
         self._hexes = hexes
 
         # Create horizontal base mesh
-        mesh_degree = 2
+        mesh_degree = 1
         if self._hexes:
             base = CubedSphereMesh(self._R,
                                    refinement_level=self._refinements,
