@@ -309,7 +309,7 @@ class GravityWaveProblem(object):
                         'pc_gamg_reuse_interpolation': True,
                         'ksp_rtol': self._rtol,
                         'mg_levels': {'ksp_type': 'chebyshev',
-                                      'ksp_max_it': 1,
+                                      'ksp_max_it': 2,
                                       'pc_type': 'bjacobi',
                                       'sub_pc_type': 'ilu'}}
         if self._monitor:
