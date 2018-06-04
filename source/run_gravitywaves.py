@@ -34,6 +34,10 @@ parser.add_argument("--hybridization",
                     help=("Use a hybridized mixed method to solve the "
                           "gravity wave equations."))
 
+parser.add_argument("--coriolis",
+                    action="store_true",
+                    help="Turn on Coriolis effects.")
+
 parser.add_argument("--mesh_degree",
                     action="store",
                     default=1,
@@ -157,6 +161,7 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
                               inner_pc_type=inner_pc_type,
                               inner_preonly=args.inner_preonly,
                               hybridization=hybridization,
+                              coriolis=args.coriolis,
                               monitor=monitor)
         problem.warmup()
         return
@@ -176,6 +181,7 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
                           inner_pc_type=inner_pc_type,
                           inner_preonly=args.inner_preonly,
                           hybridization=hybridization,
+                          coriolis=args.coriolis,
                           monitor=monitor)
     comm = problem.comm
 
@@ -329,7 +335,8 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
                      "DxAvg": problem._dx_avg,
                      "MeshDegree": problem._mesh_degree,
                      "Radius": problem._R,
-                     "LidHeight": problem._H}
+                     "LidHeight": problem._H,
+                     "Coriolis": str(problem._coriolis)}
 
         if problem._hybridization:
             updates = {"HybridTraceSolve": trace_solve,

@@ -34,7 +34,7 @@ class GravityWaveProblem(object):
     def __init__(self, order, refinements, num_layers,
                  nu_cfl, c, N, Omega, R, H, rtol=1.0E-8, mesh_degree=1,
                  hexes=False, inner_pc_type="gamg", inner_preonly=False,
-                 hybridization=False,
+                 hybridization=False, coriolis=True,
                  monitor=False):
         """The constructor for the GravityWaveProblem.
 
@@ -66,6 +66,8 @@ class GravityWaveProblem(object):
         :arg hybridization: A boolean switch between using a hybridized
             mixed method (True) on the velocity-pressure system, or GMRES
             with an approximate Schur-complement preconditioner (False).
+        :arg coriolis: A boolean to turn on/off Coriolis effects in the
+            system.
         :arg monitor: A boolean switch with turns on/off KSP monitoring
             of the problem residuals (primarily for debugging and checking
             convergence of the solver). When profiling, keep this set
@@ -154,9 +156,13 @@ class GravityWaveProblem(object):
         self._khat = interpolate(x/xnorm, mesh.coordinates.function_space())
 
         # Coriolis term
+        self._coriolis = coriolis
         fexpr = 2*self._Omega*x[2]/xnorm
         Vcg = FunctionSpace(self._mesh, "CG", self._mesh_degree)
-        self._f = interpolate(fexpr, Vcg)
+        if self._coriolis:
+            self._f = interpolate(fexpr, Vcg)
+        else:
+            self._f = Constant(0.0)
 
         # Solver details
         self._hybridization = hybridization
@@ -311,7 +317,12 @@ class GravityWaveProblem(object):
         algebraic multigrid.
         """
 
-        inner_params = {'ksp_type': 'bcgs',
+        if self._coriolis:
+            elliptic_ksp = "bcgs"
+        else:
+            elliptic_ksp = "cg"
+
+        inner_params = {'ksp_type': elliptic_ksp,
                         'pc_type': 'gamg',
                         'pc_gamg_reuse_interpolation': True,
                         'pc_gamg_sym_graph': True,
@@ -351,15 +362,19 @@ class GravityWaveProblem(object):
                                                          'pc_type': 'bjacobi',
                                                          'sub_pc_type': 'ilu'}}}
             else:
-                fs_inner_params = {'ksp_type': 'fgmres',
-                                   'pc_type': 'gamg',
-                                   'pc_gamg_reuse_interpolation': True,
-                                   'pc_gamg_sym_graph': True,
-                                   'ksp_rtol': self._rtol,
-                                   'mg_levels': {'ksp_type': 'gmres',
-                                                 'ksp_max_it': 5,
-                                                 'pc_type': 'bjacobi',
-                                                 'sub_pc_type': 'ilu'}}
+                if self._coriolis:
+                    fs_inner_params = {'ksp_type': 'fgmres',
+                                       'pc_type': 'gamg',
+                                       'pc_gamg_reuse_interpolation': True,
+                                       'pc_gamg_sym_graph': True,
+                                       'ksp_rtol': self._rtol,
+                                       'mg_levels': {'ksp_type': 'gmres',
+                                                     'ksp_max_it': 5,
+                                                     'pc_type': 'bjacobi',
+                                                     'sub_pc_type': 'ilu'}}
+                else:
+                    fs_inner_params = inner_params
+
                 if self._monitor:
                     fs_inner_params['ksp_monitor_true_residual'] = True
 
