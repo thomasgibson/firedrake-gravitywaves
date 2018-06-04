@@ -32,7 +32,7 @@ class GravityWaveProblem(object):
     """
 
     def __init__(self, order, refinements, num_layers,
-                 nu_cfl, c, N, Omega, R, rtol=1.0E-8,
+                 nu_cfl, c, N, Omega, R, H, rtol=1.0E-8, mesh_degree=1,
                  hexes=False, inner_pc_type="gamg", inner_preonly=False,
                  hybridization=False,
                  monitor=False):
@@ -53,9 +53,11 @@ class GravityWaveProblem(object):
             Earth.
         :arg R: A positive real number denoting the radius of the spherical
             mesh (Earth-size).
+        :arg H: Lid height (m).
         :arg hexes: A boolean switch which determines if hexahedral elements
             are to be used. Default is `False` (triangular prism elements).
         :arg rtol: The relative tolerance for the solver.
+        :arg mesh_degree: The degree of the coordinate field.
         :arg inner_pc_type: A string describing which inner-most preconditioner
             to use on the pressure space (approximate Schur-complement) or the
             trace space (hybridization).
@@ -76,22 +78,22 @@ class GravityWaveProblem(object):
         self._hexes = hexes
 
         # Create horizontal base mesh
-        mesh_degree = 1
+        self._mesh_degree = mesh_degree
         if self._hexes:
             base = CubedSphereMesh(self._R,
                                    refinement_level=self._refinements,
-                                   degree=mesh_degree)
+                                   degree=self._mesh_degree)
         else:
             base = IcosahedralSphereMesh(self._R,
                                          refinement_level=self._refinements,
-                                         degree=mesh_degree)
+                                         degree=self._mesh_degree)
 
         global_normal = Expression(("x[0]", "x[1]", "x[2]"))
         base.init_cell_orientations(global_normal)
         self._base = base
 
         # Thickness of spherical shell (m)
-        thickness = 80000.0
+        thickness = H
         self._H = thickness
 
         # Create extruded sphere mesh
@@ -153,7 +155,7 @@ class GravityWaveProblem(object):
 
         # Coriolis term
         fexpr = 2*self._Omega*x[2]/xnorm
-        Vcg = FunctionSpace(self._mesh, "CG", mesh_degree)
+        Vcg = FunctionSpace(self._mesh, "CG", self._mesh_degree)
         self._f = interpolate(fexpr, Vcg)
 
         # Solver details

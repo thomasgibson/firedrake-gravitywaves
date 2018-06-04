@@ -34,6 +34,18 @@ parser.add_argument("--hybridization",
                     help=("Use a hybridized mixed method to solve the "
                           "gravity wave equations."))
 
+parser.add_argument("--mesh_degree",
+                    action="store",
+                    default=1,
+                    type=int,
+                    help="Degree of the coordinate field.")
+
+parser.add_argument("--lid",
+                    action="store",
+                    type=float,
+                    default=8.0e4,
+                    help="Lid height (m)")
+
 parser.add_argument("--inner_pc_type",
                     default="gamg",
                     choices=["hypre", "gamg", "direct"],
@@ -138,7 +150,9 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
                               N=N,
                               Omega=Omega,
                               R=r_earth,
+                              H=args.lid,
                               rtol=rtol,
+                              mesh_degree=args.mesh_degree,
                               hexes=hexes,
                               inner_pc_type=inner_pc_type,
                               inner_preonly=args.inner_preonly,
@@ -155,7 +169,9 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
                           N=N,
                           Omega=Omega,
                           R=r_earth,
+                          H=args.lid,
                           rtol=rtol,
+                          mesh_degree=args.mesh_degree,
                           hexes=hexes,
                           inner_pc_type=inner_pc_type,
                           inner_preonly=args.inner_preonly,
@@ -310,7 +326,10 @@ def run_gravity_waves(problem_cls, nu_cfl, refinements, num_layers, hexes,
                      "NuCFL": nu_cfl,
                      "DxMin": problem._dx_min,
                      "DxMax": problem._dx_max,
-                     "DxAvg": problem._dx_avg}
+                     "DxAvg": problem._dx_avg,
+                     "MeshDegree": problem._mesh_degree,
+                     "Radius": problem._R,
+                     "LidHeight": problem._H}
 
         if problem._hybridization:
             updates = {"HybridTraceSolve": trace_solve,
