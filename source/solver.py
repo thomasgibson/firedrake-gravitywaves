@@ -311,13 +311,12 @@ class GravityWaveProblem(object):
         algebraic multigrid.
         """
 
-        inner_params = {'ksp_type': 'cg',
+        inner_params = {'ksp_type': 'bcgs',
                         'pc_type': 'gamg',
                         'pc_gamg_reuse_interpolation': True,
                         'pc_gamg_sym_graph': True,
                         'ksp_rtol': self._rtol,
-                        'mg_levels': {'ksp_type': 'chebyshev',
-                                      'ksp_chebyshev_esteig': True,
+                        'mg_levels': {'ksp_type': 'richardson',
                                       'ksp_max_it': 5,
                                       'pc_type': 'bjacobi',
                                       'sub_pc_type': 'ilu'}}
@@ -347,8 +346,7 @@ class GravityWaveProblem(object):
                                            'pc_type': 'gamg',
                                            'pc_gamg_reuse_interpolation': True,
                                            'pc_gamg_sym_graph': True,
-                                           'mg_levels': {'ksp_type': 'chebyshev',
-                                                         'ksp_chebyshev_esteig': True,
+                                           'mg_levels': {'ksp_type': 'richardson',
                                                          'ksp_max_it': 5,
                                                          'pc_type': 'bjacobi',
                                                          'sub_pc_type': 'ilu'}}}
