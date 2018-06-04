@@ -317,6 +317,7 @@ class GravityWaveProblem(object):
                         'pc_gamg_sym_graph': True,
                         'ksp_rtol': self._rtol,
                         'mg_levels': {'ksp_type': 'richardson',
+                                      'ksp_richardson_self_scale': True,
                                       'ksp_max_it': 5,
                                       'pc_type': 'bjacobi',
                                       'sub_pc_type': 'ilu'}}
@@ -347,6 +348,7 @@ class GravityWaveProblem(object):
                                            'pc_gamg_reuse_interpolation': True,
                                            'pc_gamg_sym_graph': True,
                                            'mg_levels': {'ksp_type': 'richardson',
+                                                         'ksp_richardson_self_scale': True,
                                                          'ksp_max_it': 5,
                                                          'pc_type': 'bjacobi',
                                                          'sub_pc_type': 'ilu'}}}
@@ -362,7 +364,16 @@ class GravityWaveProblem(object):
                           'fieldsplit_0': {'ksp_type': 'preonly',
                                            'pc_type': 'bjacobi',
                                            'sub_pc_type': 'ilu'},
-                          'fieldsplit_1': inner_params}
+                          'fieldsplit_1': {'ksp_type': 'bcgs',
+                                           'pc_type': 'gamg',
+                                           'pc_gamg_reuse_interpolation': True,
+                                           'pc_gamg_sym_graph': True,
+                                           'ksp_rtol': self._rtol,
+                                           'mg_levels': {'ksp_type': 'richardson',
+                                                         'ksp_richardson_self_scale': True,
+                                                         'ksp_max_it': 5,
+                                                         'pc_type': 'bjacobi',
+                                                         'sub_pc_type': 'ilu'}}}
             if self._monitor:
                 params['ksp_monitor_true_residual'] = True
 
