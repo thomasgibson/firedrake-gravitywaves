@@ -91,7 +91,7 @@ class GravityWaveProblem(object):
         self._base = base
 
         # Thickness of spherical shell (m)
-        thickness = 1.0e4
+        thickness = 80000.0
 
         # Create extruded sphere mesh
         mesh = ExtrudedMesh(self._base,
