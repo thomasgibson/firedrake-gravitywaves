@@ -318,19 +318,27 @@ class GravityWaveProblem(object):
         """
 
         if self._coriolis:
-            elliptic_ksp = "bcgs"
+            inner_params = {'ksp_type': 'bcgs',
+                            'pc_type': 'gamg',
+                            'pc_gamg_reuse_interpolation': True,
+                            'pc_gamg_sym_graph': True,
+                            'ksp_rtol': self._rtol,
+                            'mg_levels': {'ksp_type': 'richardson',
+                                          'ksp_max_it': 5,
+                                          'pc_type': 'bjacobi',
+                                          'sub_pc_type': 'ilu'}}
         else:
-            elliptic_ksp = "cg"
+            inner_params = {'ksp_type': 'cg',
+                            'pc_type': 'gamg',
+                            'pc_gamg_reuse_interpolation': True,
+                            'pc_gamg_sym_graph': True,
+                            'ksp_rtol': self._rtol,
+                            'mg_levels': {'ksp_type': 'chebyshev',
+                                          'ksp_chebyshev_esteig': True,
+                                          'ksp_max_it': 5,
+                                          'pc_type': 'bjacobi',
+                                          'sub_pc_type': 'ilu'}}
 
-        inner_params = {'ksp_type': elliptic_ksp,
-                        'pc_type': 'gamg',
-                        'pc_gamg_reuse_interpolation': True,
-                        'pc_gamg_sym_graph': True,
-                        'ksp_rtol': self._rtol,
-                        'mg_levels': {'ksp_type': 'richardson',
-                                      'ksp_max_it': 5,
-                                      'pc_type': 'bjacobi',
-                                      'sub_pc_type': 'ilu'}}
         if self._monitor:
             inner_params['ksp_monitor_true_residual'] = True
 
@@ -342,6 +350,18 @@ class GravityWaveProblem(object):
                       'hybridization': inner_params}
         else:
             if self._inner_preonly:
+                if self._coriolis:
+                    mg_params = {'ksp_type': 'richardson',
+                                 'ksp_max_it': 5,
+                                 'pc_type': 'bjacobi',
+                                 'sub_pc_type': 'ilu'}
+                else:
+                    mg_params = {'ksp_type': 'chebyshev',
+                                 'ksp_chebyshev_esteig': True,
+                                 'ksp_max_it': 5,
+                                 'pc_type': 'bjacobi',
+                                 'sub_pc_type': 'ilu'}
+
                 params = {'ksp_type': 'gmres',
                           'ksp_rtol': self._rtol,
                           'pc_type': 'fieldsplit',
@@ -357,10 +377,7 @@ class GravityWaveProblem(object):
                                            'pc_type': 'gamg',
                                            'pc_gamg_reuse_interpolation': True,
                                            'pc_gamg_sym_graph': True,
-                                           'mg_levels': {'ksp_type': 'richardson',
-                                                         'ksp_max_it': 5,
-                                                         'pc_type': 'bjacobi',
-                                                         'sub_pc_type': 'ilu'}}}
+                                           'mg_levels': mg_params}}
             else:
                 if self._coriolis:
                     fs_inner_params = {'ksp_type': 'fgmres',
@@ -561,13 +578,14 @@ class GravityWaveProblem(object):
         Layers: %s,\n
         Lid height (m): %s,\n
         Radius (m): %s,\n
+        Coriolis: %s,\n
         Horizontal Courant number: %s,\n
         Approx. Delta x (m): %s,\n
         Time-step size (s): %s,\n
         Stop time (s): %s.
         """ % (self._hybridization, self._order, self._refinements,
-               self._nlayers, self._R, self._H, self._nu_cfl, self._dx_avg,
-               self._dt, tmax))
+               self._nlayers, self._H, self._R, self._coriolis,
+               self._nu_cfl, self._dx_avg, self._dt, tmax))
 
         t = 0.0
         self._initialize()
