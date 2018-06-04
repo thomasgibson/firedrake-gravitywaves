@@ -92,6 +92,7 @@ class GravityWaveProblem(object):
 
         # Thickness of spherical shell (m)
         thickness = 80000.0
+        self._H = thickness
 
         # Create extruded sphere mesh
         mesh = ExtrudedMesh(self._base,
@@ -531,12 +532,14 @@ class GravityWaveProblem(object):
         Model order: %s,\n
         Refinements: %s,\n
         Layers: %s,\n
+        Lid height (m): %s,\n
+        Radius (m): %s,\n
         Horizontal Courant number: %s,\n
         Approx. Delta x (m): %s,\n
         Time-step size (s): %s,\n
         Stop time (s): %s.
         """ % (self._hybridization, self._order, self._refinements,
-               self._nlayers, self._nu_cfl, self._dx_avg,
+               self._nlayers, self._R, self._H, self._nu_cfl, self._dx_avg,
                self._dt, tmax))
 
         t = 0.0
