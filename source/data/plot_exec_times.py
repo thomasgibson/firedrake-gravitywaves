@@ -11,11 +11,11 @@ MARKERSIZE = 10
 LINEWIDTH = 3
 
 
-cfls = [1, 2, 4, 8, 10, 16, 24]
+cfls = [1, 2, 4, 8, 10, 16, 24, 32]
 gmres_lo = ["gmres_cg_gamg_lo/gmres_order1_profile_GW_ref6_cfl%s_NS1.csv"
             % cfl for cfl in cfls]
 gmres_nlo = ["gmres_cg_gamg_nlo/gmres_order2_profile_GW_ref4_cfl%s_NS1.csv"
-             % cfl for cfl in [1, 2, 4, 8, 10, 16]]
+             % cfl for cfl in cfls]
 gmres_lo_preonly = ["gmres_preonly_gamg_lo/gmres_order1_profile_GW_ref6_cfl%s_NS1.csv"
                     % cfl for cfl in cfls]
 gmres_nlo_preonly = ["gmres_preonly_gamg_nlo/gmres_order2_profile_GW_ref4_cfl%s_NS1.csv"
@@ -44,8 +44,8 @@ ax, = axes
 
 ax.set_ylabel("Time [s]", fontsize=FONTSIZE+2)
 ax.set_xticks(cfls)
-yrange = np.arange(0, 100, 10)
-ax.set_ylim([0, 100])
+yrange = np.arange(0, 75, 5)
+ax.set_ylim([0, 75])
 ax.set_yticks(yrange)
 
 gmres_lo_dfs = [pd.read_csv(d) for d in gmres_lo]
@@ -62,7 +62,7 @@ for df in gmres_lo_dfs:
     gmres_lo_cfls.append(df.NuCFL.values[0])
 
 ax.plot(gmres_lo_cfls, gmres_lo_times,
-        label="gmres cg+gamg lo",
+        label="gmres (CG + AMG) LO",
         color=colors[0],
         marker=markers[0],
         linewidth=LINEWIDTH,
@@ -77,7 +77,7 @@ for df in gmres_nlo_dfs:
     gmres_nlo_cfls.append(df.NuCFL.values[0])
 
 ax.plot(gmres_nlo_cfls, gmres_nlo_times,
-        label="gmres cg+gamg nlo",
+        label="gmres (CG + AMG) NLO",
         color=colors[0],
         marker=markers[0],
         linewidth=LINEWIDTH,
@@ -92,7 +92,7 @@ for df in gmres_pre_lo_dfs:
     gmres_pre_lo_cfls.append(df.NuCFL.values[0])
 
 ax.plot(gmres_pre_lo_cfls, gmres_pre_lo_times,
-        label="gmres preonly gamg lo",
+        label="gmres (preonly AMG) LO",
         color=colors[1],
         marker=markers[1],
         linewidth=LINEWIDTH,
@@ -107,7 +107,7 @@ for df in gmres_pre_nlo_dfs:
     gmres_pre_nlo_cfls.append(df.NuCFL.values[0])
 
 ax.plot(gmres_pre_nlo_cfls, gmres_pre_nlo_times,
-        label="gmres preonly gamg nlo",
+        label="gmres (preonly AMG) NLO",
         color=colors[1],
         marker=markers[1],
         linewidth=LINEWIDTH,
@@ -122,7 +122,7 @@ for df in hybrid_lo_dfs:
     hybrid_lo_cfls.append(df.NuCFL.values[0])
 
 ax.plot(hybrid_lo_cfls, hybrid_lo_times,
-        label="hybrid cg+gamg lo",
+        label="hybrid. (CG + AMG) LO",
         color=colors[2],
         marker=markers[2],
         linewidth=LINEWIDTH,
@@ -137,7 +137,7 @@ for df in hybrid_nlo_dfs:
     hybrid_nlo_cfls.append(df.NuCFL.values[0])
 
 ax.plot(hybrid_nlo_cfls, hybrid_nlo_times,
-        label="hybrid cg+gamg nlo",
+        label="hybrid. (CG + AMG) NLO",
         color=colors[2],
         marker=markers[2],
         linewidth=LINEWIDTH,

@@ -11,11 +11,11 @@ MARKERSIZE = 10
 LINEWIDTH = 3
 
 
-cfls = [1, 2, 4, 8, 10, 16, 24]
+cfls = [1, 2, 4, 8, 10, 16, 24, 32]
 gmres_lo = ["gmres_cg_gamg_lo/gmres_order1_data_GW_ref6_cfl%s_NS1.csv"
             % cfl for cfl in cfls]
 gmres_nlo = ["gmres_cg_gamg_nlo/gmres_order2_data_GW_ref4_cfl%s_NS1.csv"
-             % cfl for cfl in [1, 2, 4, 8, 10, 16]]
+             % cfl for cfl in cfls]
 gmres_lo_preonly = ["gmres_preonly_gamg_lo/gmres_order1_data_GW_ref6_cfl%s_NS1.csv"
                     % cfl for cfl in cfls]
 gmres_nlo_preonly = ["gmres_preonly_gamg_nlo/gmres_order2_data_GW_ref4_cfl%s_NS1.csv"
@@ -39,8 +39,8 @@ ax, = axes
 
 ax.set_ylabel("gmres iterations", fontsize=FONTSIZE+2)
 ax.set_xticks(cfls)
-yrange = np.arange(0, 50, 10)
-ax.set_ylim([0, 50])
+yrange = np.arange(0, 20, 2)
+ax.set_ylim([0, 20])
 ax.set_yticks(yrange)
 
 gmres_lo_dfs = [pd.read_csv(d) for d in gmres_lo]
@@ -53,7 +53,7 @@ for df in gmres_lo_dfs:
     gmres_lo_iters.append(df.OuterIters.values[0])
 
 ax.plot(cfls, gmres_lo_iters,
-        label="gmres cg+gamg lo",
+        label="gmres (CG + AMG) LO",
         color=colors[0],
         marker=markers[0],
         linewidth=LINEWIDTH,
@@ -65,8 +65,8 @@ gmres_nlo_iters = []
 for df in gmres_nlo_dfs:
     gmres_nlo_iters.append(df.OuterIters.values[0])
 
-ax.plot([1, 2, 4, 8, 10, 16], gmres_nlo_iters,
-        label="gmres cg+gamg nlo",
+ax.plot(cfls, gmres_nlo_iters,
+        label="gmres (CG + AMG) NLO",
         color=colors[0],
         marker=markers[0],
         linewidth=LINEWIDTH,
@@ -79,7 +79,7 @@ for df in gmres_pre_lo_dfs:
     gmres_pre_lo_iters.append(df.OuterIters.values[0])
 
 ax.plot(cfls, gmres_pre_lo_iters,
-        label="gmres preonly gamg lo",
+        label="gmres (preonly AMG) LO",
         color=colors[1],
         marker=markers[1],
         linewidth=LINEWIDTH,
@@ -92,7 +92,7 @@ for df in gmres_pre_nlo_dfs:
     gmres_pre_nlo_iters.append(df.OuterIters.values[0])
 
 ax.plot(cfls, gmres_pre_nlo_iters,
-        label="gmres preonly gamg nlo",
+        label="gmres (preonly AMG) NLO",
         color=colors[1],
         marker=markers[1],
         linewidth=LINEWIDTH,

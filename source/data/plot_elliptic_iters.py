@@ -11,11 +11,11 @@ MARKERSIZE = 10
 LINEWIDTH = 3
 
 
-cfls = [1, 2, 4, 8, 10, 16, 24]
+cfls = [1, 2, 4, 8, 10, 16, 24, 32]
 gmres_lo = ["gmres_cg_gamg_lo/gmres_order1_data_GW_ref6_cfl%s_NS1.csv"
             % cfl for cfl in cfls]
 gmres_nlo = ["gmres_cg_gamg_nlo/gmres_order2_data_GW_ref4_cfl%s_NS1.csv"
-             % cfl for cfl in [1, 2, 4, 8, 10, 16]]
+             % cfl for cfl in cfls]
 hybrid_lo = ["hybrid_cg_gamg_lo/hybrid_order1_data_GW_ref6_cfl%s_NS1.csv"
              % cfl for cfl in cfls]
 hybrid_nlo = ["hybrid_cg_gamg_nlo/hybrid_order2_data_GW_ref4_cfl%s_NS1.csv"
@@ -39,8 +39,8 @@ ax, = axes
 
 ax.set_ylabel("CG iterations", fontsize=FONTSIZE+2)
 ax.set_xticks(cfls)
-yrange = np.arange(0, 40, 10)
-ax.set_ylim([0, 40])
+yrange = np.arange(0, 15, 1)
+ax.set_ylim([0, 15])
 ax.set_yticks(yrange)
 
 gmres_lo_dfs = [pd.read_csv(d) for d in gmres_lo]
@@ -53,7 +53,7 @@ for df in gmres_lo_dfs:
     elliptic_lo_iters.append(df.InnerIters.values[0])
 
 ax.plot(cfls, elliptic_lo_iters,
-        label="KSP($\\widehat{S}$, gamg) lo",
+        label="KSP($\\widehat{S}$, AMG) LO",
         color=colors[0],
         marker=markers[0],
         linewidth=LINEWIDTH,
@@ -65,8 +65,8 @@ elliptic_nlo_iters = []
 for df in gmres_nlo_dfs:
     elliptic_nlo_iters.append(df.InnerIters.values[0])
 
-ax.plot([1, 2, 4, 8, 10, 16], elliptic_nlo_iters,
-        label="KSP($\\widehat{S}$, gamg) nlo",
+ax.plot(cfls, elliptic_nlo_iters,
+        label="KSP($\\widehat{S}$, AMG) NLO",
         color=colors[0],
         marker=markers[0],
         linewidth=LINEWIDTH,
@@ -79,7 +79,7 @@ for df in hybrid_lo_dfs:
     hybrid_lo_iters.append(df.InnerIters.values[0])
 
 ax.plot(cfls, hybrid_lo_iters,
-        label="KSP($S_{\\lambda}$, gamg) lo",
+        label="KSP($S_{\\lambda}$, AMG) LO",
         color=colors[2],
         marker=markers[2],
         linewidth=LINEWIDTH,
@@ -92,7 +92,7 @@ for df in hybrid_nlo_dfs:
     hybrid_nlo_iters.append(df.InnerIters.values[0])
 
 ax.plot(cfls, hybrid_nlo_iters,
-        label="KSP($S_{\\lambda}$, gamg) nlo",
+        label="KSP($S_{\\lambda}$, AMG) NLO",
         color=colors[2],
         marker=markers[2],
         linewidth=LINEWIDTH,
